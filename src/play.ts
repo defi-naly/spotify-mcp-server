@@ -161,6 +161,43 @@ const skipToPrevious: tool<{
   },
 };
 
+// Exported so the DJ orchestrator can create a playlist without going
+// through the MCP tool-handler shell.
+export async function createPlaylistCore(opts: {
+  name: string;
+  description?: string;
+  isPublic?: boolean;
+}) {
+  const { name, description, isPublic = false } = opts;
+  return handleSpotifyRequest(async (spotifyApi) => {
+    const me = await spotifyApi.currentUser.profile();
+    return spotifyApi.playlists.createPlaylist(me.id, {
+      name,
+      description,
+      public: isPublic,
+    });
+  });
+}
+
+// Exported so the DJ orchestrator can add tracks without going through
+// the MCP tool-handler shell. Uses /items directly (see spotifyFetch JSDoc).
+export async function addTracksToPlaylistCore(opts: {
+  playlistId: string;
+  trackIds: string[];
+  position?: number;
+}): Promise<void> {
+  const { playlistId, trackIds, position } = opts;
+  if (trackIds.length === 0) return;
+  const trackUris = trackIds.map((id) => `spotify:track:${id}`);
+  await spotifyFetch(`playlists/${playlistId}/items`, {
+    method: 'POST',
+    body: {
+      uris: trackUris,
+      ...(position !== undefined ? { position } : {}),
+    },
+  });
+}
+
 const createPlaylist: tool<{
   name: z.ZodString;
   description: z.ZodOptional<z.ZodString>;
@@ -181,17 +218,7 @@ const createPlaylist: tool<{
   },
   handler: async (args, _extra: SpotifyHandlerExtra) => {
     const { name, description, public: isPublic = false } = args;
-
-    const result = await handleSpotifyRequest(async (spotifyApi) => {
-      const me = await spotifyApi.currentUser.profile();
-
-      return await spotifyApi.playlists.createPlaylist(me.id, {
-        name,
-        description,
-        public: isPublic,
-      });
-    });
-
+    const result = await createPlaylistCore({ name, description, isPublic });
     return {
       content: [
         {

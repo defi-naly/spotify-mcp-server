@@ -14,6 +14,7 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
   - [Album Operations](#album-operations)
   - [Play / Create Operations](#play--create-operations)
   - [Playlist Operations](#playlist-operations)
+  - [DJ Operations (this fork)](#dj-operations-this-fork)
 - [Setup](#setup)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
@@ -290,6 +291,57 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
    - **Returns**: Success confirmation with the move details
    - **Example**: `reorderPlaylistItems({ playlistId: "3cEYpjA9oz9GiPac4AsH4n", rangeStart: 2, insertBefore: 0 })`
 
+### DJ Operations (this fork)
+
+These tools are added by this fork to curate BPM-matched playlists for DJ mixing. They pair well with rekordbox's native Spotify integration (Sep 2025): Claude builds the playlist, rekordbox streams it onto the deck.
+
+Spotify's own audio-features / recommendations / related-artists endpoints were deprecated for new developer apps in late 2024, so BPM and similarity come from third-party sources. Configure `getSongBpmApiKey` and `lastFmApiKey` in `spotify-config.json`:
+
+- BPM: sign up at [getsongbpm.com/api](https://getsongbpm.com/api) (free, requires brief approval). Coverage is best for chart and electronic music.
+- Similar artists: sign up at [last.fm/api/account/create](https://www.last.fm/api/account/create) (free, instant).
+
+BPM lookups also fall back to AcousticBrainz via ISRC for tracks that getsongbpm misses, but coverage thins for post-2022 releases.
+
+1. **getTrackBpm**
+
+   - **Description**: Look up the BPM (tempo) of a Spotify track
+   - **Parameters**:
+     - `trackId` (string): The Spotify track ID
+   - **Returns**: BPM and source (`getsongbpm` or `acousticbrainz`)
+   - **Example**: `getTrackBpm({ trackId: "6rqhFgbbKwnb9MLmUQDhG6" })`
+
+2. **getSimilarArtistsForTrack**
+
+   - **Description**: Get artists similar to a Spotify track's primary artist via Last.fm
+   - **Parameters**:
+     - `trackId` (string): The Spotify track ID
+     - `limit` (number, optional): How many similar artists to return (1-50, default: 20)
+   - **Returns**: Ranked list of similar artists with Last.fm match scores
+   - **Example**: `getSimilarArtistsForTrack({ trackId: "6rqhFgbbKwnb9MLmUQDhG6", limit: 10 })`
+
+3. **getArtistTopTracks**
+
+   - **Description**: Get an artist's top tracks on Spotify (up to 10)
+   - **Parameters**:
+     - `artistId` (string): The Spotify artist ID
+     - `market` (string, optional): ISO 3166-1 alpha-2 market code (default: US)
+   - **Returns**: Formatted list of top tracks with IDs
+   - **Example**: `getArtistTopTracks({ artistId: "1dfeR4HaWDbWqFHLkxsg1d" })`
+
+4. **buildBpmMatchedPlaylist**
+
+   - **Description**: Build a Spotify playlist of tracks BPM-matched to a seed track, sourced from similar artists' top tracks. Half-time and double-time matches are accepted (musically compatible for mixing).
+   - **Parameters**:
+     - `seedTrackId` (string): Spotify track ID to seed from
+     - `playlistName` (string): Name for the new playlist
+     - `bpmTolerance` (number, optional): BPM tolerance window (0-20, default: 5)
+     - `targetSize` (number, optional): Target playlist size (1-100, default: 30)
+     - `similarArtistLimit` (number, optional): How many similar artists to pull from (1-50, default: 20)
+     - `market` (string, optional): ISO market code for top-tracks lookup (default: US)
+     - `isPublic` (boolean, optional): Public playlist (default: false)
+   - **Returns**: Playlist URL plus summary (candidates checked, missing BPM count, BPM histogram)
+   - **Example**: `buildBpmMatchedPlaylist({ seedTrackId: "6rqhFgbbKwnb9MLmUQDhG6", playlistName: "House 128 BPM Set", bpmTolerance: 4, targetSize: 25 })`
+
 ## Setup
 
 ### Prerequisites
@@ -409,3 +461,7 @@ To set up your MCP correctly with Cline ensure you have the following file confi
 ```
 
 You can add additional tools to the auto approval array to run the tools without intervention.
+
+## Credits
+
+Track tempo (BPM) data used by the DJ tools in this fork is provided by [GetSongBPM](https://getsongbpm.com). Similar-artist data is provided by [Last.fm](https://www.last.fm). Original Spotify MCP server by [Marcel Marais](https://github.com/marcelmarais/spotify-mcp-server).

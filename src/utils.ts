@@ -16,6 +16,9 @@ export interface SpotifyConfig {
   accessToken?: string;
   refreshToken?: string;
   expiresAt?: number; // Unix timestamp in milliseconds
+  // Optional third-party API keys for DJ-curation tools.
+  getSongBpmApiKey?: string;
+  lastFmApiKey?: string;
 }
 
 export function loadSpotifyConfig(): SpotifyConfig {
@@ -48,13 +51,53 @@ export function saveSpotifyConfig(config: SpotifyConfig): void {
 
 let cachedSpotifyApi: SpotifyApi | null = null;
 
+// Coalesces concurrent refresh attempts so multiple in-flight requests
+// share one round-trip to /api/token instead of stampeding (and risking
+// invalidating the refresh_token via parallel use).
+let refreshInFlight: Promise<SpotifyConfig> | null = null;
+
+// Refresh proactively when the token has less than this much life left.
+// Saves a round-trip mid-request and avoids the SDK firing its own
+// silent refresh (which would never get persisted to disk).
+const REFRESH_SKEW_MS = 60_000;
+
+async function ensureFreshToken(): Promise<SpotifyConfig> {
+  const config = loadSpotifyConfig();
+  if (!(config.accessToken && config.refreshToken)) return config;
+
+  const now = Date.now();
+  const expiringSoon =
+    !config.expiresAt || config.expiresAt - now <= REFRESH_SKEW_MS;
+  if (!expiringSoon) return config;
+
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    try {
+      const tokens = await refreshAccessToken(config);
+      config.accessToken = tokens.access_token;
+      config.expiresAt = Date.now() + tokens.expires_in * 1000;
+      if (tokens.refresh_token) {
+        // Spotify may rotate refresh tokens; the old one becomes invalid
+        // once a new one is issued, so persist immediately.
+        config.refreshToken = tokens.refresh_token;
+      }
+      saveSpotifyConfig(config);
+      cachedSpotifyApi = null;
+      return config;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
 /**
  * Direct Spotify Web API fetch helper.
- * Used to bypass @spotify/web-api-ts-sdk methods that hit deprecated endpoints
- * (e.g. /playlists/{id}/tracks which was retired in the March 2026 API migration
- * for new Development Mode apps; replacement is /playlists/{id}/items).
  *
- * Handles token loading and refresh transparently.
+ * Handles token loading and refresh transparently. Used everywhere we
+ * want to avoid the SDK's silent internal refresh (which would never be
+ * persisted back to spotify-config.json and would drift on restart).
  */
 export async function spotifyFetch<T = unknown>(
   endpoint: string,
@@ -65,19 +108,7 @@ export async function spotifyFetch<T = unknown>(
   } = {},
 ): Promise<T> {
   const { method = 'GET', body, query } = options;
-  const config = loadSpotifyConfig();
-
-  // Refresh token if expired
-  if (config.accessToken && config.refreshToken) {
-    const now = Date.now();
-    if (!config.expiresAt || config.expiresAt <= now) {
-      const tokens = await refreshAccessToken(config);
-      config.accessToken = tokens.access_token;
-      config.expiresAt = now + tokens.expires_in * 1000;
-      saveSpotifyConfig(config);
-      cachedSpotifyApi = null;
-    }
-  }
+  const config = await ensureFreshToken();
 
   if (!config.accessToken) {
     throw new Error(
@@ -120,37 +151,12 @@ export async function spotifyFetch<T = unknown>(
 }
 
 export async function createSpotifyApi(): Promise<SpotifyApi> {
-  const config = loadSpotifyConfig();
+  const config = await ensureFreshToken();
 
   if (config.accessToken && config.refreshToken) {
+    if (cachedSpotifyApi) return cachedSpotifyApi;
+
     const now = Date.now();
-    const shouldRefresh = !config.expiresAt || config.expiresAt <= now;
-
-    if (shouldRefresh) {
-      console.log(
-        'Access token expired or missing expiration time, refreshing...',
-      );
-      try {
-        const tokens = await refreshAccessToken(config);
-        config.accessToken = tokens.access_token;
-        config.expiresAt = now + tokens.expires_in * 1000; // Convert seconds to milliseconds
-        saveSpotifyConfig(config);
-        console.log('Access token refreshed successfully');
-
-        // Clear cached API instance to force recreation with new token
-        cachedSpotifyApi = null;
-      } catch (error) {
-        console.error('Failed to refresh token:', error);
-        throw new Error(
-          'Failed to refresh access token. Please run "npm run auth" to re-authenticate.',
-        );
-      }
-    }
-
-    if (cachedSpotifyApi) {
-      return cachedSpotifyApi;
-    }
-
     const accessToken = {
       access_token: config.accessToken,
       token_type: 'Bearer',
@@ -227,9 +233,11 @@ async function exchangeCodeForToken(
   };
 }
 
-async function refreshAccessToken(
-  config: SpotifyConfig,
-): Promise<{ access_token: string; expires_in: number }> {
+async function refreshAccessToken(config: SpotifyConfig): Promise<{
+  access_token: string;
+  expires_in: number;
+  refresh_token?: string;
+}> {
   if (!config.refreshToken) {
     throw new Error('No refresh token available');
   }
@@ -259,6 +267,8 @@ async function refreshAccessToken(
   return {
     access_token: data.access_token,
     expires_in: data.expires_in || 3600,
+    // Spotify rotates refresh tokens; when present, callers must persist.
+    refresh_token: data.refresh_token,
   };
 }
 

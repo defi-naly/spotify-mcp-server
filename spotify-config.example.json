@@ -4,5 +4,7 @@
   "redirectUri": "http://127.0.0.1:8888/callback",
   "accessToken": "run-npm auth to get this",
   "refreshToken": "run-npm auth to get this",
-  "expiresAt": "automatically set during authentication"
+  "expiresAt": "automatically set during authentication",
+  "getSongBpmApiKey": "optional: signup at https://getsongbpm.com/api for BPM lookup",
+  "lastFmApiKey": "optional: signup at https://www.last.fm/api/account/create for similar-artist lookup"
 }
